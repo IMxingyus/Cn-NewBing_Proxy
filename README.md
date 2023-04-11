@@ -1,5 +1,8 @@
 # Cn-NewBing_Proxy : [Cn-NewBing](https://github.com/IMxingyus/Cn-NewBing "Cn-NewBing")插件的配套代理服务
 
+- Docker 可直接部署  
+- Linux 安装 jdk11 环境 `./run.sh `运行  
+
 ## 关于
 这是一个Bing AI的插件的代理服务  
 本项目是 [jianjianai/NewBingGoGo-MagicURL-java](https://github.com/jianjianai/NewBingGoGo-MagicURL-java "jianjianai/NewBingGoGo-MagicURL-java") 的分支，为了配套 [Cn-NewBing](https://github.com/IMxingyus/Cn-NewBing "Cn-NewBing") 而做了一些简单修改。  

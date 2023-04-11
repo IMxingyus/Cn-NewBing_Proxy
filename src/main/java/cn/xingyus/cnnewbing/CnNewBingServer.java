@@ -3,18 +3,20 @@ package cn.xingyus.cnnewbing;
 import fi.iki.elonen.NanoHTTPD;
 import fi.iki.elonen.NanoWSD;
 
-import java.io.IOException;
+import java.io.*;
 import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.ProtocolException;
 import java.net.URL;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.function.BiConsumer;
 
-public class CnNewBingServer extends NanoWSD {
-    ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
-    public static void main(String[] args) throws IOException {
+public class CnNewbingServer extends NanoWSD {
+    ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
+    public static void main(String[] args) {
         if(args.length<1){
             System.err.print("需要指定运行端口号！");
             return;
@@ -22,28 +24,32 @@ public class CnNewBingServer extends NanoWSD {
         try{
             int porint = Integer.parseInt(args[0]);
             System.out.println("程序已在"+porint+"端口上启动.");
-            new CnNewBingServer(porint).start(5000,false);
+            new CnNewbingServer(porint).start(5000,false);
         }catch(Throwable s){
             s.printStackTrace();
         }
     }
-    public CnNewBingServer(int port) {
+    public CnNewbingServer(int port) {
         super(port);
     }
 
     @Override
-    public Response serve(IHTTPSession session) {
-        String url = session.getUri();
-        if(url.startsWith("/ChatHub")){
-            return super.serve(session);
+    public Response serveHttp(IHTTPSession session) {
+        if(!isUser(session)){
+            return getReturnError("请求头无user-agent参数，拒绝请求！");
         }
-        if(url.startsWith("/Create")){//创建聊天
+        String ip = new Date()+":"+getIp(session);
+        String url = session.getUri();
+        if(url.equals("/turing/conversation/create")){//创建聊天
+            System.out.println(ip+":请求创建聊天");
             return goUrl(session,"https://www.bing.com/turing/conversation/create");
         }
-        if(url.startsWith("/bingcopilotwaitlist")){//加入候补
-            return goUrl(session,"https://www.bing.com/msrewards/api/v1/enroll?publ=BINGIP&crea=MY00IA&pn=bingcopilotwaitlist&partnerId=BingRewards&pred=true&wtc=MktPage_MY0291");
+        if(url.equals("/msrewards/api/v1/enroll")){//加入候补
+            System.out.println(ip+":请求加入候补");
+            return goUrl(session,"https://www.bing.com/msrewards/api/v1/enroll?"+session.getQueryParameterString());
         }
-        if(url.startsWith("/AiDraw/Create")){
+        if(url.equals("/images/create")){
+            System.out.println(ip+":请求AI画图");
             HashMap<String,String> he = new HashMap<>();
             he.put("sec-fetch-site","same-origin");
             he.put("referer","https://www.bing.com/search?q=bingAI");
@@ -52,10 +58,10 @@ public class CnNewBingServer extends NanoWSD {
             return re;
         }
         if(url.startsWith("/images/create/async/results")){
+            System.out.println(ip+":请求AI画图图片");
             String gogoUrl = url.replace("/images/create/async/results","https://www.bing.com/images/create/async/results");
             gogoUrl = gogoUrl+"?"+session.getQueryParameterString();
  //           /641f0e9c318346378e94e495ab61a703?q=a+dog&partner=sydney&showselective=1
-
             HashMap<String,String> he = new HashMap<>();
             he.put("sec-fetch-site","same-origin");
             he.put("referer","https://www.bing.com/images/create?partner=sydney&showselective=1&sude=1&kseed=7000");
@@ -63,13 +69,35 @@ public class CnNewBingServer extends NanoWSD {
             re.setMimeType("text/html");
             return re;
         }
-        String r = "{\"result\":{\"value\":\"error\",\"message\":\"出现错误。也许是插件版本过旧或没有使用插件。\"}}";
-        return newFixedLengthResponse(Response.Status.OK,"application/json",r);
+        return getReturnError("出现错误 可能的原因：浏览器直接访问、插件版本不匹配。");
     }
 
     @Override
     protected WebSocket openWebSocket(IHTTPSession handshake) {
-        return new CnNewBingClientWebSocket(handshake,executor);
+        if(!isUser(handshake)){
+            return getReturnErrorWebSocket(handshake,"请求头无user-agent参数，拒绝请求！");
+        }
+        String ip = new Date()+":"+getIp(handshake);
+        String url = handshake.getUri();
+        if(url.equals("/sydney/ChatHub")){
+            System.out.println(ip+":创建代理聊天连接");
+            return new CnNewbingServerWebSocket(handshake,scheduledExecutorService);
+        }
+        return getReturnErrorWebSocket(handshake,"请求接口错误！");
+    }
+
+    public static boolean isUser(IHTTPSession session){
+        String ua = session.getHeaders().get("user-agent");
+        return ua!=null;
+    }
+    public static String getIp(IHTTPSession session){
+        String ip = session.getHeaders().get("x-forwarded-for");
+        if (ip==null){
+            ip = session.getRemoteIpAddress();
+        }else {
+            ip = ip.split(",")[0];
+        }
+        return ip;
     }
 
     /*
@@ -78,78 +106,147 @@ public class CnNewBingServer extends NanoWSD {
     public static NanoHTTPD.Response goUrl(NanoHTTPD.IHTTPSession session,String stringUrl){
         return goUrl(session,stringUrl,new HashMap<>(1));
     }
-    public static NanoHTTPD.Response goUrl(NanoHTTPD.IHTTPSession session,String stringUrl,Map<String,String> headers){
+
+
+    public static NanoHTTPD.Response goUrl(NanoHTTPD.IHTTPSession session,String stringUrl,Map<String,String> addHeaders){
+        URL url;
         try {
-            URL url = new URL(stringUrl);
-            HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
-            urlConnection.setRequestMethod("GET");
-            urlConnection.setDoOutput(false);
-            urlConnection.setDoInput(true);
-            urlConnection.setUseCaches(true);
-            urlConnection.setInstanceFollowRedirects(true);
-            urlConnection.setConnectTimeout(3000);
-
-            Map<String,String> header = session.getHeaders();
-            String[] b = {"cookie","user-agent","accept","accept-language"};
-            for (String s : b) {
-                String v = header.get(s);
-                urlConnection.addRequestProperty(s,v);
-            }
-            headers.forEach(urlConnection::addRequestProperty);
-
-            Response.Status status = Response.Status.lookup(urlConnection.getResponseCode());
-            if(status==null){
-                status =  Response.Status.INTERNAL_ERROR;
-            }
-            return NanoHTTPD.newFixedLengthResponse(
-                    status,
-                    "application/json",
-                    urlConnection.getInputStream(),
-                    urlConnection.getContentLengthLong()
-            );
-        } catch (IOException e) {
-            String r = "{\"result\":{\"value\":\"error\",\"message\":\""+escapeJsonString(e.toString())+"\"}}";
-            return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK,"application/json",r);
+            url = new URL(stringUrl);
+        } catch (MalformedURLException e) {
+            return getReturnError(e);
         }
+
+        HttpURLConnection urlConnection;
+        try{
+            urlConnection = (HttpURLConnection) url.openConnection();
+        } catch (IOException e) {
+           return getReturnError(e);
+        }
+        try {
+            urlConnection.setRequestMethod("GET");
+        } catch (ProtocolException e) {
+            return getReturnError(e);
+        }
+        urlConnection.setDoOutput(false);
+        urlConnection.setDoInput(true);
+        urlConnection.setUseCaches(true);
+        urlConnection.setInstanceFollowRedirects(true);
+        urlConnection.setConnectTimeout(3000);
+
+        //拷贝头信息
+        Map<String,String> header = session.getHeaders();
+        String[] b = {"cookie","user-agent","accept","accept-language"};
+        for (String s : b) {
+            String v = header.get(s);
+            urlConnection.addRequestProperty(s,v);
+        }
+        //添加指定的头部信息
+        addHeaders.forEach(urlConnection::addRequestProperty);
+
+        //建立链接
+        try {
+            urlConnection.connect();
+        } catch (IOException e) {
+            return getReturnError(e);
+        }
+        int code;
+        try{
+            code = urlConnection.getResponseCode();
+        } catch (IOException e) {
+            return getReturnError(e);
+        }
+        //获取请求状态代码
+        if(code!=200){
+            urlConnection.disconnect();
+            return getReturnError("此代理链接服务器请求被Bing拒绝！请稍后再试。错误代码:"+code,null,false);
+        }
+
+        //将数据全部读取然后关闭流和链接
+        int len = urlConnection.getContentLength();
+        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream(Math.max(len, 0));
+        try(InputStream inputStream = urlConnection.getInputStream()){
+            for (int i = 0; i < len; i++) {
+                byteArrayOutputStream.write(inputStream.read());
+            }
+        }catch (FileNotFoundException e){
+            urlConnection.disconnect();
+            return getReturnError("此代理链接服务器无法正常工作，请求被Bing拒绝！",e,false);
+        }catch (IOException e) {
+            urlConnection.disconnect();
+            return getReturnError(e);
+        }
+        urlConnection.disconnect();
+
+        //创建用于输出的流
+        ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(byteArrayOutputStream.toByteArray());
+        return NanoHTTPD.newFixedLengthResponse(
+                Response.Status.OK,
+                "application/json",
+                byteArrayInputStream,
+                len
+        );
     }
 
-
-    public static String escapeJsonString(String input) {
-        // 创建一个StringBuilder对象，用于存储转义后的字符串
-        StringBuilder output = new StringBuilder();
-        // 遍历输入字符串的每个字符
-        for (int i = 0; i < input.length(); i++) {
-            // 获取当前字符
-            char c = input.charAt(i);
-            // 判断当前字符是否需要转义
-            switch (c) {
-                // 如果是双引号或反斜杠，添加一个反斜杠作为前缀
-                case '"': case '\\':{
-                    output.append('\\');
-                    output.append(c);
-                    break;
-                }
-                // 如果是换行符，添加一个反斜杠和一个n作为替代
-                case '\n':{
-                    output.append('\\');
-                    output.append('n');
-                    break;
-                }
-                // 如果是制表符，添加一个反斜杠和一个t作为替代
-                case '\t':{
-                    output.append('\\');
-                    output.append('t');
-                    break;
-                }
-                // 其他情况下，直接添加当前字符
-                default :{
-                    output.append(c);
-                    break;
-                }
+    public static WebSocket getReturnErrorWebSocket(IHTTPSession session,String error){
+        return new WebSocket(session) {
+            @Override
+            protected void onOpen(){
+                String errorMessage = "{\"type\": 2,\"result\":{\"value\":\"Error\",\"message\":\""+escapeJsonString(error)+"\"}}";
+                try{
+                    this.send(errorMessage);
+                    this.close(NanoWSD.WebSocketFrame.CloseCode.NormalClosure,"error",false);
+                } catch (IOException ignored) {}
             }
+            @Override
+            protected void onClose(WebSocketFrame.CloseCode code, String reason, boolean initiatedByRemote) {}
+            @Override
+            protected void onMessage(WebSocketFrame message) {}
+            @Override
+            protected void onPong(WebSocketFrame pong) {}
+            @Override
+            protected void onException(IOException exception) {}
+        };
+    }
+
+    /**
+     * 获取返回的错误
+     * */
+    public static NanoHTTPD.Response getReturnError(Throwable error){
+        return getReturnError("服务器内部发生未知错误!",error,true);
+    }
+    public static NanoHTTPD.Response getReturnError(String error){
+        return getReturnError(error,null,true);
+    }
+    /**
+     * @param all 是否全部打印
+     * */
+    public static NanoHTTPD.Response getReturnError(String message,Throwable error,boolean all){
+        String r;
+        if (error==null){
+            r = "{\"result\":{\"value\":\"error\",\"message\":\""+escapeJsonString(message)+"\"}}";
+        }else if(all){
+            r = "{\"result\":{\"value\":\"error\",\"message\":\""+escapeJsonString(message+"详情:"+printErrorToString(error))+"\"}}";
+        }else {
+            r = "{\"result\":{\"value\":\"error\",\"message\":\""+escapeJsonString(message+"详情:"+error)+"\"}}";
         }
-        // 返回转义后的字符串
-        return output.toString();
+        return NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.OK,"application/json",r);
+    }
+
+    /**
+     * 转义成json字符串
+     * */
+    public static String escapeJsonString(String input) {
+        return input
+                .replace("\\","\\\\")
+                .replace("\n","\\n")
+                .replace("\r","\\r")
+                .replace("\t","\\t")
+                .replace("\"","\\\"");
+    }
+    public static String printErrorToString(Throwable t) {
+        StringWriter sw = new StringWriter();
+        t.printStackTrace(new PrintWriter(sw, true));
+        return  sw.getBuffer().toString();
     }
 
 }
